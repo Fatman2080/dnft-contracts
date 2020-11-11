@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.6.0;
+pragma solidity >0.6.0;
 
 library Lib {
 
@@ -34,9 +34,9 @@ library Lib {
         uint256 gl = gasleft();
         uint256 seed = uint256(keccak256(abi.encodePacked(
                 block.timestamp + block.difficulty +
-                ((uint256(keccak256(abi.encodePacked(block.coinbase)))) / (now)) +
+                ((uint256(keccak256(abi.encodePacked(block.coinbase)))) / (block.timestamp)) +
                 block.gaslimit + gl +
-                ((uint256(keccak256(abi.encodePacked(msg.sender)))) / (now)) +
+                ((uint256(keccak256(abi.encodePacked(msg.sender)))) / (block.timestamp)) +
                 block.number
             )));
         return min + (seed - ((seed / (max - min)) * (max - min)));

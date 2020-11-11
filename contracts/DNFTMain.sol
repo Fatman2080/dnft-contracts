@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.6.0;
+pragma solidity >0.6.0;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/utils/Counters.sol";
@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./DNFTLibrary.sol";
 import "./interfaces/IDNFTProduct.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 
 contract DNFTMain is Pausable, Ownable {
 
@@ -17,8 +18,12 @@ contract DNFTMain is Pausable, Ownable {
         address parent;
         address[] children;
         uint256 buyCount;
+        uint256 rewardCount;
         uint256 withdrawTotalValue;
     }
+    using SafeERC20 for IERC20;
+    using SafeMath for uint256;
+    using SafeMath for uint32;
 
     address public mainCreator;
     address payable public withdrawTo;
@@ -35,25 +40,29 @@ contract DNFTMain is Pausable, Ownable {
 
     mapping(address => address[]) public _playerChildren;
 
-    event ProductBuy(address player, string product, uint256 cost, uint256 tokenId);
-    event ProductReward(address to, address from, string fromProduct, string toProduct, uint256 cost, uint256 fromTokenId, uint256 toTokenId);
-    event ProductMintBegin(address player, string product, uint256 tokenId);
-    event ProductMintWithdraw(address player, string product, uint256 tokenId, uint256 value);
-    event ProductMintRedeem(address player, string product, uint256 tokenId, uint256 value);
+    uint256 public playerCount;
+
+    event AddPlayer(address indexed player);
+    event ProductBuy(address indexed player, string product, uint256 tokenId);
+    event ProductReward(address indexed to, address indexed from, string fromProduct, string toProduct, uint256 cost, uint256 fromTokenId, uint256 toTokenId);
+    event ProductMintBegin(address indexed player, string product, uint256 indexed tokenId);
+    event ProductMintWithdraw(address indexed player, string product, uint256 indexed tokenId, uint256 value);
+    event ProductMintRedeem(address indexed player, string product, uint256 indexed tokenId, uint256 value);
 
 
-    constructor(address _dnftAddr, address payable _withdrawTo) public {
+    constructor(address _dnftAddr, address payable _withdrawTo) {
         mainCreator = msg.sender;
         withdrawTo = _withdrawTo;
         dnftToken = IERC20(_dnftAddr);
     }
-
 
     function _getPlayer(address addr) private returns (Player storage){
         if (_players[addr].addr == address(0)) {
             Player memory player;
             player.addr = addr;
             _players[addr] = player;
+            playerCount++;
+            emit AddPlayer(addr);
         }
         return _players[addr];
     }
@@ -63,20 +72,6 @@ contract DNFTMain is Pausable, Ownable {
         return IDNFTProduct(_products[name]);
     }
 
-    function setRewardProductName(string calldata name) external {
-        require(_products[name] != address(0), "Product not exists.");
-        rewardProductName = name;
-    }
-
-    function withdrawToken(address token, uint256 value) external {
-        require(msg.sender == withdrawTo, "Must be withdraw account.");
-        IERC20(token).transfer(withdrawTo, value);
-    }
-
-    function withdrawETH(uint256 value) external {
-        require(msg.sender == withdrawTo, "Must be withdraw account.");
-        withdrawTo.transfer(value);
-    }
 
     function getPlayer(address addr) external view returns (Player memory){
         return _players[addr];
@@ -96,17 +91,42 @@ contract DNFTMain is Pausable, Ownable {
         return _productNames;
     }
 
-    function addProduct(address paddr, uint256 dnftValue) external onlyOwner {
+    function setWithdrawTo(address payable addr) external {
+        require(msg.sender == withdrawTo, "Must be withdraw account.");
+        withdrawTo = addr;
+    }
+
+    function withdrawToken(address token, uint256 value) external {
+        require(msg.sender == withdrawTo, "Must be withdraw account.");
+        if (token == address(0))
+            withdrawTo.transfer(value);
+        else
+            IERC20(token).safeTransfer(withdrawTo, value);
+    }
+
+    function withdrawProductToken(string calldata name, address token, uint256 value) external {
+        require(msg.sender == withdrawTo, "Must be withdraw account.");
+        IDNFTProduct p = _getProduct(name);
+        p.withdrawToken(withdrawTo, token, value);
+    }
+
+    function setRewardProductName(string calldata name) onlyOwner external {
+        require(_products[name] != address(0), "Product not exists.");
+        rewardProductName = name;
+    }
+
+    function addProduct(address paddr, uint256 dnftValue) onlyOwner external {
         IDNFTProduct p = IDNFTProduct(paddr);
         string memory name = p.name();
         require(_products[name] == address(0), "Product already exists.");
-        require(p.owner() == address(this), "Product owner not main.");
+        require(p.mainAddr() == address(this), "Product main addr this.");
         _products[name] = paddr;
         _productNames.push(name);
-        require(dnftToken.transfer(paddr, dnftValue), "DNFT Token transfer fail.");
+        dnftToken.safeTransfer(paddr, dnftValue);
     }
 
     function buyProduct(string calldata name, address playerParent) external payable {
+        require(playerParent != msg.sender, "Pay parent wrong.");
         IDNFTProduct p = _getProduct(name);
         if (bytes(rewardProductName).length != 0)
             require(address(p) != _products[rewardProductName], "This product cannot be purchased.");
@@ -116,9 +136,8 @@ contract DNFTMain is Pausable, Ownable {
             require(msg.value == cost, "Pay value wrong.");
         else {
             require(msg.value == 0, "Pay value must be zero.");
-            require(IERC20(costTokenAddr).transferFrom(msg.sender, address(this), cost), "Token transfer fail.");
+            IERC20(costTokenAddr).safeTransferFrom(msg.sender, address(this), cost);
         }
-        require(playerParent != msg.sender, "Pay parent wrong.");
         Player storage player = _getPlayer(msg.sender);
         if (playerParent != address(0)) {
             Player storage parentPlayer = _getPlayer(playerParent);
@@ -128,10 +147,15 @@ contract DNFTMain is Pausable, Ownable {
         _productsCount[name].buyCount++;
         player.buyCount++;
         uint256 tokenId = p.buy(msg.sender);
-        emit ProductBuy(msg.sender, name, msg.value, tokenId);
+        emit ProductBuy(msg.sender, name, tokenId);
         if (player.buyCount == 1 && player.parent != address(0) && bytes(rewardProductName).length != 0) {
-            uint256 toTokenId = IDNFTProduct(_products[rewardProductName]).buy(player.parent);
-            emit ProductReward(player.parent, msg.sender, name, rewardProductName, msg.value, tokenId, toTokenId);
+            IDNFTProduct rp = IDNFTProduct(_products[rewardProductName]);
+            if (_productsCount[rewardProductName].buyCount < rp.maxTokenSize()) {
+                _getPlayer(player.parent).rewardCount++;
+                _productsCount[rewardProductName].buyCount++;
+                uint256 toTokenId = rp.buy(player.parent);
+                emit ProductReward(player.parent, msg.sender, name, rewardProductName, msg.value, tokenId, toTokenId);
+            }
         }
     }
 

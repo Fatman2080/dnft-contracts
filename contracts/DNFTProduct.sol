@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.6.0;
+pragma solidity >0.6.0;
 pragma experimental ABIEncoderV2;
 
 import "./DNFTLibrary.sol";
@@ -12,11 +12,14 @@ import "./interfaces/IUniswapV2Factory.sol";
 import "./interfaces/IUniswapV2Router01.sol";
 import "./interfaces/IUniswapV2Router02.sol";
 import "./interfaces/IERC20Token.sol";
+import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 
 contract DNFTProduct is ERC721, Ownable {
 
     using SafeMath for uint256;
+    using SafeMath for uint;
     using SafeMath for uint32;
+    using SafeERC20 for IERC20;
 
     using Counters for Counters.Counter;
     using EnumerableSet for EnumerableSet.UintSet;
@@ -28,6 +31,7 @@ contract DNFTProduct is ERC721, Ownable {
 
     address public dnftTokenAddr;
     address public uniswapAddr;
+    address public mainAddr;
 
     uint256 public mintPerTimeValue;
 
@@ -43,16 +47,20 @@ contract DNFTProduct is ERC721, Ownable {
     Counters.Counter private _tokenIds;
     bool private _init;
 
+    modifier onlyMain() {
+        require(mainAddr == msg.sender, "caller is not the main");
+        _;
+    }
     constructor (
         string memory _name,
         string memory _symbol,
         string memory baseURI
-    )  ERC721(_name, _symbol) public {
+    )  ERC721(_name, _symbol) {
         _setBaseURI(string(abi.encodePacked(baseURI, _name, "/")));
     }
 
     function initProduct(
-        address mainAddr,
+        address _mainAddr,
         address _dnftTokenAddr,
         address _uniswapAddr,
         uint16 _id,
@@ -64,6 +72,7 @@ contract DNFTProduct is ERC721, Ownable {
     ) external onlyOwner {
         require(!_init, "repeat init");
         require(_maxTokenSize < 1E6, "product total supply must be < 1E6");
+        mainAddr = _mainAddr;
         pid = _id;
         costTokenAddr = _costTokenAddr;
         cost = _cost;
@@ -72,7 +81,6 @@ contract DNFTProduct is ERC721, Ownable {
         totalReturnRate = _totalReturnRate;
         dnftTokenAddr = _dnftTokenAddr;
         uniswapAddr = _uniswapAddr;
-        transferOwnership(mainAddr);
         if (_costTokenAddr != address(0)) {
             costTokenDecimals = IERC20Token(_costTokenAddr).decimals();
         } else {
@@ -82,6 +90,7 @@ contract DNFTProduct is ERC721, Ownable {
         mintPerTimeValue = totalReturnRate.mul(cost).div(100).div(maxMintTime.div(mintTimeInterval));
     }
 
+
     function _onlyMinter(address from, uint256 tokenId) private view {
         require(_isApprovedOrOwner(address(this), tokenId), "ERC721: transfer caller is not owner nor approved");
         require(_tokenDetails[tokenId].mining == true, "Token no mining.");
@@ -90,11 +99,9 @@ contract DNFTProduct is ERC721, Ownable {
 
     function _getUniswapPrice(IUniswapV2Router02 r02, uint256 one, address token1, address token2) private view returns (uint256){
         IUniswapV2Factory f = IUniswapV2Factory(r02.factory());
-
         address pairAddr = f.getPair(token1, token2);
         require(pairAddr != address(0), "DNFT uniswap pair not exists.");
         IUniswapV2Pair pair = IUniswapV2Pair(pairAddr);
-
         uint r1 = 0;
         uint r2 = 0;
         uint timestamp = 0;
@@ -134,7 +141,7 @@ contract DNFTProduct is ERC721, Ownable {
         if (freeTimeNum <= 0) {
             return (0, 0);
         }
-        timeNum = now.sub(detail.currMining.withdrawTime).div(mintTimeInterval);
+        timeNum = block.timestamp.sub(detail.currMining.withdrawTime).div(mintTimeInterval);
         if (timeNum > freeTimeNum) {
             timeNum = freeTimeNum;
         }
@@ -174,7 +181,7 @@ contract DNFTProduct is ERC721, Ownable {
         uint holdLength = balanceOf(owner);
         uint tokenLengthSize = mintTokens.length() + holdLength;
         if (tokenLengthSize == 0) {
-            Lib.ProductTokenDetail[] memory zt;
+            Lib.ProductTokenDetail[] memory zt = new Lib.ProductTokenDetail[](0);
             return zt;
         }
         Lib.ProductTokenDetail[] memory tokens = new Lib.ProductTokenDetail[](tokenLengthSize);
@@ -200,8 +207,16 @@ contract DNFTProduct is ERC721, Ownable {
         return _tokenMintHistories[tid];
     }
 
+
+    function withdrawToken(address payable to, address token, uint256 value) onlyMain external {
+        if (token == address(0))
+            to.transfer(value);
+        else
+            IERC20(token).safeTransfer(to, value);
+    }
+
     // buy product
-    function buy(address to) external onlyOwner returns (uint256) {
+    function buy(address to) external onlyMain returns (uint256) {
         require(_tokenIds.current() < maxTokenSize, "product not enough");
         _tokenIds.increment();
         uint256 tid = pid * 1E6 + _tokenIds.current();
@@ -217,14 +232,14 @@ contract DNFTProduct is ERC721, Ownable {
     }
 
 
-    function mintBegin(address from, uint256 tokenId) external onlyOwner {
+    function mintBegin(address from, uint256 tokenId) external onlyMain {
         require(_isApprovedOrOwner(from, tokenId), "ERC721: transfer caller is not owner nor approved");
         Lib.ProductTokenDetail storage detail = _tokenDetails[tokenId];
         require(detail.mining == false, "Token already mining.");
         require(detail.totalTime < maxMintTime, "Token already dead.");
         detail.mining = true;
         detail.currMining.minter = from;
-        detail.currMining.beginTime = now;
+        detail.currMining.beginTime = block.timestamp;
         detail.currMining.endTime = 0;
         detail.currMining.withdrawTime = detail.currMining.beginTime;
         _tokenMints[from].add(tokenId);
@@ -236,18 +251,18 @@ contract DNFTProduct is ERC721, Ownable {
         return _canWithdrawValue(tokenId);
     }
 
-    function mintWithdraw(address from, uint256 tokenId) external onlyOwner returns (uint256) {
+    function mintWithdraw(address from, uint256 tokenId) external onlyMain returns (uint256) {
         _onlyMinter(from, tokenId);
         return _mintWithdraw(from, tokenId);
     }
 
-    function redeem(address from, uint256 tokenId) external onlyOwner returns (uint256){
+    function redeem(address from, uint256 tokenId) external onlyMain returns (uint256){
         _onlyMinter(from, tokenId);
         uint256 withdrawNum = _mintWithdraw(from, tokenId);
 
         Lib.ProductTokenDetail storage detail = _tokenDetails[tokenId];
         detail.mining = false;
-        detail.currMining.endTime = now;
+        detail.currMining.endTime = block.timestamp;
         _tokenMintHistories[tokenId].push(detail.currMining);
 
         _tokenMints[from].remove(tokenId);
