@@ -46,8 +46,8 @@ contract DNFTMain is Pausable, Ownable {
     event ProductBuy(address indexed player, string product, uint256 tokenId);
     event ProductReward(address indexed to, address indexed from, string fromProduct, string toProduct, uint256 cost, uint256 fromTokenId, uint256 toTokenId);
     event ProductMintBegin(address indexed player, string product, uint256 indexed tokenId);
-    event ProductMintWithdraw(address indexed player, string product, uint256 indexed tokenId, uint256 value);
-    event ProductMintRedeem(address indexed player, string product, uint256 indexed tokenId, uint256 value);
+    event ProductMintWithdraw(address indexed player, string product, uint256 indexed tokenId, uint256 value, uint256 timeNum);
+    event ProductMintRedeem(address indexed player, string product, uint256 indexed tokenId, uint256 value, uint256 timeNum);
 
 
     constructor(address _dnftAddr, address payable _withdrawTo) {
@@ -119,7 +119,7 @@ contract DNFTMain is Pausable, Ownable {
         IDNFTProduct p = IDNFTProduct(paddr);
         string memory name = p.name();
         require(_products[name] == address(0), "Product already exists.");
-        require(p.mainAddr() == address(this), "Product main addr this.");
+        require(p.mainAddr() == address(this), "Product main addr not this.");
         _products[name] = paddr;
         _productNames.push(name);
         dnftToken.safeTransfer(paddr, dnftValue);
@@ -169,22 +169,22 @@ contract DNFTMain is Pausable, Ownable {
     function mintWithdraw(string calldata name, uint256 tokenId) external {
         IDNFTProduct p = _getProduct(name);
         Player storage player = _getPlayer(msg.sender);
-        uint256 withdrawNum = p.mintWithdraw(msg.sender, tokenId);
+        (uint256 withdrawNum,uint256 timeNum) = p.mintWithdraw(msg.sender, tokenId);
         player.withdrawTotalValue += withdrawNum;
         _productsCount[name].withdrawCount++;
         _productsCount[name].withdrawSum += withdrawNum;
-        emit ProductMintWithdraw(msg.sender, name, tokenId, withdrawNum);
+        emit ProductMintWithdraw(msg.sender, name, tokenId, withdrawNum, timeNum);
     }
 
     function redeemProduct(string calldata name, uint256 tokenId) external {
         IDNFTProduct p = _getProduct(name);
         Player storage player = _getPlayer(msg.sender);
-        uint256 withdrawNum = p.redeem(msg.sender, tokenId);
+        (uint256 withdrawNum,uint256 timeNum) = p.redeem(msg.sender, tokenId);
         player.withdrawTotalValue += withdrawNum;
         _productsCount[name].miningCount--;
         _productsCount[name].withdrawSum += withdrawNum;
         _productsCount[name].redeemedCount++;
-        emit ProductMintRedeem(msg.sender, name, tokenId, withdrawNum);
+        emit ProductMintRedeem(msg.sender, name, tokenId, withdrawNum, timeNum);
     }
 
 }

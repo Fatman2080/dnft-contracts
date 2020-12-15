@@ -17,7 +17,6 @@ import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 contract DNFTProduct is ERC721, Ownable {
 
     using SafeMath for uint256;
-    using SafeMath for uint;
     using SafeMath for uint32;
     using SafeERC20 for IERC20;
 
@@ -97,20 +96,18 @@ contract DNFTProduct is ERC721, Ownable {
         require(_tokenDetails[tokenId].currMining.minter == from, "Token mine is not owner.");
     }
 
-    function _getUniswapPrice(IUniswapV2Router02 r02, uint256 one, address token1, address token2) private view returns (uint256){
+    function _getUniswapPrice(IUniswapV2Router02 r02, uint256 _tv1, address token1, address token2) private view returns (uint256){
+        uint256 tv1 = _tv1;
         IUniswapV2Factory f = IUniswapV2Factory(r02.factory());
         address pairAddr = f.getPair(token1, token2);
         require(pairAddr != address(0), "DNFT uniswap pair not exists.");
-        IUniswapV2Pair pair = IUniswapV2Pair(pairAddr);
-        uint r1 = 0;
-        uint r2 = 0;
-        uint timestamp = 0;
-        if (pair.token0() == token2) {
-            (r2, r1, timestamp) = pair.getReserves();
-        } else {
-            (r1, r2, timestamp) = pair.getReserves();
-        }
-        return r02.getAmountOut(one, r1, r2);
+        IERC20Token t1 = IERC20Token(token1);
+        IERC20Token t2 = IERC20Token(token2);
+        uint256 tb1 = t1.balanceOf(pairAddr);
+        uint256 tb2 = t2.balanceOf(pairAddr);
+        require(tb1 > 0 && tb2 > 0, "Pair token balance < 0");
+        uint256 td1 = 10 ** t1.decimals();
+        return td1.mul(tv1).div(tb1).mul(tb2).div(td1);
     }
 
     function _getDNFTPrice() private view returns (uint256){
@@ -157,10 +154,10 @@ contract DNFTProduct is ERC721, Ownable {
         }
     }
 
-    function _mintWithdraw(address player, uint256 tokenId) private returns (uint256){
+    function _mintWithdraw(address player, uint256 tokenId) private returns (uint256, uint256){
         (uint256 timeNum, uint256 dnftNum) = _canWithdrawValue(tokenId);
         if (dnftNum <= 0)
-            return dnftNum;
+            return (dnftNum, timeNum);
         Lib.ProductTokenDetail storage detail = _tokenDetails[tokenId];
         detail.totalValue = detail.totalValue.add(dnftNum);
         detail.currMining.totalValue = detail.currMining.totalValue.add(dnftNum);
@@ -168,7 +165,7 @@ contract DNFTProduct is ERC721, Ownable {
         detail.currMining.withdrawTime = detail.currMining.withdrawTime.add(useTime);
         detail.totalTime = detail.totalTime.add(useTime);
         IERC20Token(dnftTokenAddr).transfer(player, dnftNum);
-        return dnftNum;
+        return (dnftNum, timeNum);
     }
 
 
@@ -251,14 +248,14 @@ contract DNFTProduct is ERC721, Ownable {
         return _canWithdrawValue(tokenId);
     }
 
-    function mintWithdraw(address from, uint256 tokenId) external onlyMain returns (uint256) {
+    function mintWithdraw(address from, uint256 tokenId) external onlyMain returns (uint256, uint256) {
         _onlyMinter(from, tokenId);
         return _mintWithdraw(from, tokenId);
     }
 
-    function redeem(address from, uint256 tokenId) external onlyMain returns (uint256){
+    function redeem(address from, uint256 tokenId) external onlyMain returns (uint256, uint256){
         _onlyMinter(from, tokenId);
-        uint256 withdrawNum = _mintWithdraw(from, tokenId);
+        (uint256 withdrawNum,uint256 timeNum) = _mintWithdraw(from, tokenId);
 
         Lib.ProductTokenDetail storage detail = _tokenDetails[tokenId];
         detail.mining = false;
@@ -270,7 +267,7 @@ contract DNFTProduct is ERC721, Ownable {
         detail.currMining = currItem;
 
         _safeTransfer(address(this), from, tokenId, "");
-        return withdrawNum;
+        return (withdrawNum, timeNum);
     }
 
 }

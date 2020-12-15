@@ -43,8 +43,8 @@ interface IDNFTProduct is IERC721 {
 
     function mintBegin(address from, uint256 tokenId) external;
 
-    function mintWithdraw(address from, uint256 tokenId) external returns (uint256);
+    function mintWithdraw(address from, uint256 tokenId) external returns (uint256, uint256);
 
-    function redeem(address from, uint256 tokenId) external returns (uint256);
+    function redeem(address from, uint256 tokenId) external returns (uint256, uint256);
 
 }
